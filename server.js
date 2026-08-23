@@ -3,7 +3,7 @@ const cors = require('cors');
 const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
-const { execFile, exec } = require('child_process');
+const { execFile } = require('child_process');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -16,27 +16,56 @@ if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 const isWin = process.platform === 'win32';
 const YTDLP_PATH = path.join(BIN_DIR, isWin ? 'yt-dlp.exe' : 'yt-dlp');
 
-// Ensure yt-dlp binary exists on startup (Auto-download for Linux Cloud / Railway)
 async function ensureYtdlp() {
-  if (!fs.existsSync(YTDLP_PATH)) {
-    console.log('Downloading yt-dlp binary for environment...');
-    const downloadUrl = isWin
-      ? 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe'
-      : 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp';
+  try {
+    if (!fs.existsSync(YTDLP_PATH)) {
+      console.log('Downloading yt-dlp binary for cloud environment...');
+      const downloadUrl = isWin
+        ? 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe'
+        : 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp';
 
-    const response = await axios({ method: 'GET', url: downloadUrl, responseType: 'arraybuffer' });
-    fs.writeFileSync(YTDLP_PATH, response.data);
-    if (!isWin) fs.chmodSync(YTDLP_PATH, '755');
-    console.log('yt-dlp binary downloaded successfully.');
+      const response = await axios({ method: 'GET', url: downloadUrl, responseType: 'arraybuffer', timeout: 30000 });
+      fs.writeFileSync(YTDLP_PATH, response.data);
+      if (!isWin) fs.chmodSync(YTDLP_PATH, '755');
+      console.log('yt-dlp binary downloaded successfully.');
+    }
+  } catch (e) {
+    console.error('yt-dlp auto-download warning:', e.message);
   }
 }
-ensureYtdlp().catch(console.error);
 
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, '../src')));
 
-// Platform Detection Helper
+const possiblePaths = [
+  path.join(__dirname, 'src'),
+  path.join(__dirname, '../src'),
+  __dirname
+];
+
+possiblePaths.forEach(p => {
+  if (fs.existsSync(p)) {
+    app.use(express.static(p));
+  }
+});
+
+// Explicit Homepage Route (Fixes 'Cannot GET /' error 100%)
+app.get('/', (req, res) => {
+  const possibleIndexFiles = [
+    path.join(__dirname, 'src/index.html'),
+    path.join(__dirname, '../src/index.html'),
+    path.join(__dirname, 'index.html')
+  ];
+
+  for (const file of possibleIndexFiles) {
+    if (fs.existsSync(file)) {
+      return res.sendFile(file);
+    }
+  }
+
+  return res.status(200).send('<h1>UltraDownloader Server is Live!</h1>');
+});
+
 function detectPlatform(url) {
   if (!url) return null;
   if (/youtube\.com|youtu\.be/i.test(url)) return 'youtube';
@@ -45,7 +74,6 @@ function detectPlatform(url) {
   return 'unknown';
 }
 
-// Extract Video Info & Metadata
 function getVideoMetadata(url, platform) {
   return new Promise((resolve, reject) => {
     execFile(YTDLP_PATH, ['-j', '--no-playlist', url], { maxBuffer: 10 * 1024 * 1024 }, (err, stdout) => {
@@ -92,7 +120,6 @@ function getVideoMetadata(url, platform) {
   });
 }
 
-// API Endpoint to parse media URL
 app.post('/api/parse', async (req, res) => {
   const { url } = req.body;
   if (!url) {
@@ -112,7 +139,6 @@ app.post('/api/parse', async (req, res) => {
   }
 });
 
-// Download Proxy Endpoint
 app.get('/api/download', (req, res) => {
   const { videoUrl, formatCode, filename } = req.query;
   const safeFilename = (filename || 'downloaded_video.mp4').replace(/[^a-zA-Z0-9_.-]/g, '_');
@@ -127,7 +153,6 @@ app.get('/api/download', (req, res) => {
   const selectedFormat = formatCode || 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best';
   const args = ['--no-part', '--merge-output-format', ext, '-f', selectedFormat, '-o', targetFilePath, videoUrl];
 
-  console.log(`Executing yt-dlp merge download to ${targetFilePath}...`);
   execFile(YTDLP_PATH, args, { timeout: 180000 }, (err, stdout, stderr) => {
     if (err || !fs.existsSync(targetFilePath)) {
       console.error('Download/Merge Error:', err || stderr);
@@ -148,4 +173,5 @@ app.get('/api/download', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Media Downloader Server running on port ${PORT}`);
+  ensureYtdlp().catch(console.error);
 });
