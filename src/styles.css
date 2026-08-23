@@ -1,0 +1,51 @@
+/* Smooth Scrolling */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #020617;
+}
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
+
+/* Hover & Animation Effects */
+.platform-badge {
+  transition: all 0.25s ease-in-out;
+}
+.platform-badge:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 10px 25px -5px rgba(99, 102, 241, 0.25);
+}
+
+.quality-option-card {
+  transition: all 0.2s ease-in-out;
+}
+.quality-option-card:hover {
+  border-color: #6366f1;
+  background-color: rgba(99, 102, 241, 0.1);
+  transform: scale(1.01);
+}
+
+/* Glowing Animations */
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 20px rgba(99, 102, 241, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 35px rgba(168, 85, 247, 0.45);
+  }
+}
+
+.glow-effect {
+  animation: pulse-glow 3s infinite ease-in-out;
+}

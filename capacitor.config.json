@@ -1,0 +1,11 @@
+{
+  "appId": "com.ultradownloader.app",
+  "appName": "UltraDownloader",
+  "webDir": "src",
+  "bundledWebRuntime": false,
+  "android": {
+    "allowMixedContent": true,
+    "captureInput": true,
+    "backgroundColor": "#020617"
+  }
+}
