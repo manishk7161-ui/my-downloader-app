@@ -89,10 +89,10 @@ function getVideoMetadata(url, platform) {
           platform,
           videoId: videoId || Date.now().toString(),
           formats: [
-            { label: '1080p Full HD Video', quality: '1080p', type: 'video/mp4', formatCode: 'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best', ext: 'mp4' },
-            { label: '720p HD Video', quality: '720p', type: 'video/mp4', formatCode: 'bestvideo[height<=720]+bestaudio/best[height<=720]/best', ext: 'mp4' },
-            { label: '480p SD Video', quality: '480p', type: 'video/mp4', formatCode: 'bestvideo[height<=480]+bestaudio/best[height<=480]/best', ext: 'mp4' },
-            { label: '360p SD Video', quality: '360p', type: 'video/mp4', formatCode: 'bestvideo[height<=360]+bestaudio/best[height<=360]/best', ext: 'mp4' },
+            { label: '1080p Full HD Video', quality: '1080p', type: 'video/mp4', formatCode: 'bestvideo[height<=1080]+bestaudio/best', ext: 'mp4' },
+            { label: '720p HD Video', quality: '720p', type: 'video/mp4', formatCode: 'bestvideo[height<=720]+bestaudio/best', ext: 'mp4' },
+            { label: '480p SD Video', quality: '480p', type: 'video/mp4', formatCode: 'bestvideo[height<=480]+bestaudio/best', ext: 'mp4' },
+            { label: '360p SD Video', quality: '360p', type: 'video/mp4', formatCode: 'bestvideo[height<=360]+bestaudio/best', ext: 'mp4' },
             { label: 'Audio High Quality (MP3)', quality: 'Audio', type: 'audio/mp3', formatCode: 'bestaudio/best', ext: 'mp3' }
           ]
         });
@@ -172,70 +172,59 @@ app.post('/api/parse', async (req, res) => {
   }
 });
 
-app.get('/api/download', async (req, res) => {
+app.get('/api/download', (req, res) => {
   const { videoUrl, formatCode, filename } = req.query;
-  const safeFilename = (filename || 'downloaded_video.mp4').replace(/[^a-zA-Z0-9_.-]/g, '_');
-  const ext = safeFilename.endsWith('.mp3') ? 'mp3' : 'mp4';
 
   if (!videoUrl) {
     return res.status(400).send('Missing videoUrl parameter.');
   }
 
-  const requestedFormat = formatCode || 'bestvideo+bestaudio/best';
-  const formatArg = `${requestedFormat}/best[ext=mp4]/b/bestvideo+bestaudio/best`;
-  
-  const args = [
-    '--no-part', 
-    '--concurrent-fragments', '1', 
-    '--buffer-size', '16k', 
-    '-f', formatArg, 
-    '-o', '-', 
-    videoUrl
-  ];
+  const requestedFormat = formatCode || 'best[ext=mp4]/bestvideo+bestaudio/best';
 
-  console.log(`Piping chunked stream for ${safeFilename}...`);
-  const ytProcess = spawn(YTDLP_PATH, args);
-
-  let headerSent = false;
-
-  ytProcess.stdout.on('data', (chunk) => {
-    if (!headerSent) {
-      headerSent = true;
-      res.writeHead(200, {
-        'Content-Type': ext === 'mp3' ? 'audio/mpeg' : 'video/mp4',
-        'Content-Disposition': `attachment; filename="${safeFilename}"`,
-        'Transfer-Encoding': 'chunked',
-        'Connection': 'keep-alive',
-        'Cache-Control': 'no-cache'
-      });
-    }
-    res.write(chunk);
-  });
-
-  ytProcess.stdout.on('end', () => {
-    if (headerSent) {
-      res.end();
-    }
-  });
-
-  ytProcess.stderr.on('data', (d) => {
-    const msg = d.toString();
-    if (msg.includes('ERROR:')) console.error('yt-dlp stream error:', msg);
-  });
-
-  ytProcess.on('exit', (code) => {
-    if (!headerSent) {
-      console.error('yt-dlp exited before sending video data, code:', code);
-      if (!res.headersSent) {
-        return res.status(500).send('Download error. Please try again.');
+  execFile(YTDLP_PATH, ['-g', '-f', requestedFormat, videoUrl], { timeout: 15000 }, (err, stdout) => {
+    if (!err && stdout && stdout.trim()) {
+      const urls = stdout.trim().split('\n');
+      const directCdnUrl = urls[0];
+      if (directCdnUrl && directCdnUrl.startsWith('http')) {
+        console.log('Redirecting to direct CDN URL instantly!');
+        return res.redirect(302, directCdnUrl);
       }
     }
-  });
 
-  req.on('close', () => {
-    try {
-      ytProcess.kill();
-    } catch (e) {}
+    const safeFilename = (filename || 'downloaded_video.mp4').replace(/[^a-zA-Z0-9_.-]/g, '_');
+    const ext = safeFilename.endsWith('.mp3') ? 'mp3' : 'mp4';
+    const formatArg = `${requestedFormat}/best[ext=mp4]/b/bestvideo+bestaudio/best`;
+    
+    const args = ['--no-part', '--concurrent-fragments', '1', '--buffer-size', '16k', '-f', formatArg, '-o', '-', videoUrl];
+    const ytProcess = spawn(YTDLP_PATH, args);
+
+    let headerSent = false;
+    ytProcess.stdout.on('data', (chunk) => {
+      if (!headerSent) {
+        headerSent = true;
+        res.writeHead(200, {
+          'Content-Type': ext === 'mp3' ? 'audio/mpeg' : 'video/mp4',
+          'Content-Disposition': `attachment; filename="${safeFilename}"`,
+          'Transfer-Encoding': 'chunked',
+          'Connection': 'keep-alive'
+        });
+      }
+      res.write(chunk);
+    });
+
+    ytProcess.stdout.on('end', () => {
+      if (headerSent) res.end();
+    });
+
+    ytProcess.on('exit', (code) => {
+      if (!headerSent && !res.headersSent) {
+        return res.status(500).send('Download error. Please try again.');
+      }
+    });
+
+    req.on('close', () => {
+      try { ytProcess.kill(); } catch (e) {}
+    });
   });
 });
 
