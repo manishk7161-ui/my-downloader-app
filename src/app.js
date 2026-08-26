@@ -17,7 +17,36 @@ document.addEventListener('DOMContentLoaded', () => {
   const downloadSpeed = document.getElementById('downloadSpeed');
   const downloadStatus = document.getElementById('downloadStatus');
 
-  // Clipboard Paste Button
+  const shareWhatsappBtn = document.getElementById('shareWhatsappBtn');
+  const pwaInstallBtn = document.getElementById('pwaInstallBtn');
+
+  let deferredPrompt;
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredPrompt = e;
+    if (pwaInstallBtn) pwaInstallBtn.classList.remove('hidden');
+  });
+
+  if (pwaInstallBtn) {
+    pwaInstallBtn.addEventListener('click', async () => {
+      if (deferredPrompt) {
+        deferredPrompt.prompt();
+        const { outcome } = await deferredPrompt.userChoice;
+        if (outcome === 'accepted') {
+          pwaInstallBtn.classList.add('hidden');
+        }
+        deferredPrompt = null;
+      }
+    });
+  }
+
+  if (shareWhatsappBtn) {
+    shareWhatsappBtn.addEventListener('click', () => {
+      const text = encodeURIComponent(`🔥 Download YouTube, Instagram Reels & Facebook Videos in HD Free without watermark!\nTry now: ${window.location.href}`);
+      window.open(`https://api.whatsapp.com/send?text=${text}`, '_blank');
+    });
+  }
+
   pasteBtn.addEventListener('click', async () => {
     try {
       const text = await navigator.clipboard.readText();
@@ -29,7 +58,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Analyze Link Button
   fetchBtn.addEventListener('click', async () => {
     const url = videoUrlInput.value.trim();
     if (!url) {
@@ -62,12 +90,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Display video details & quality options
   function displayVideoPreview(originalUrl, data) {
     videoThumb.src = data.thumbnail || 'https://via.placeholder.com/150';
     videoTitle.textContent = data.title || 'Video Preview';
     
-    // Platform Badge Styling
     const platform = data.platform.toUpperCase();
     platformTag.textContent = platform;
     if (platform === 'YOUTUBE') {
@@ -78,7 +104,6 @@ document.addEventListener('DOMContentLoaded', () => {
       platformTag.className = 'inline-block px-2.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-blue-950 text-blue-300 border border-blue-800';
     }
 
-    // Render Quality Buttons
     qualityOptions.innerHTML = '';
     data.formats.forEach((fmt) => {
       const optionCard = document.createElement('div');
@@ -86,14 +111,14 @@ document.addEventListener('DOMContentLoaded', () => {
       optionCard.innerHTML = `
         <div class="flex items-center space-x-3 overflow-hidden">
           <div class="w-9 h-9 rounded-xl bg-indigo-950/80 border border-indigo-700/50 flex items-center justify-center text-indigo-400 text-sm shrink-0">
-            <i class="fa-solid ${fmt.ext === 'mp3' ? 'fa-music text-purple-400' : 'fa-video text-indigo-400'}"></i>
+            <i class="fa-solid ${fmt.ext === 'mp3' ? 'fa-music text-purple-400' : 'fa-film text-indigo-400'}"></i>
           </div>
           <div class="truncate">
             <h5 class="text-xs font-bold text-slate-200 truncate">${fmt.label}</h5>
-            <p class="text-[10px] text-slate-400">Audio + Video Merged • Playable MP4</p>
+            <p class="text-[10px] text-emerald-400 font-medium">1-Tap Direct MP4 Download</p>
           </div>
         </div>
-        <button class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-3.5 py-2 rounded-xl shadow-md flex items-center space-x-1.5 transition shrink-0">
+        <button class="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white text-xs font-extrabold px-4 py-2 rounded-xl shadow-md flex items-center space-x-1.5 transition shrink-0">
           <i class="fa-solid fa-download"></i>
           <span>Download</span>
         </button>
@@ -111,48 +136,24 @@ document.addEventListener('DOMContentLoaded', () => {
     previewCard.scrollIntoView({ behavior: 'smooth' });
   }
 
-  // Trigger Video Download & Progress simulation
   function triggerDownload(videoUrl, title, format) {
     const cleanTitle = (title || 'video').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 30);
     const fileName = `${cleanTitle}_${format.quality}.${format.ext}`;
 
-    progressCard.classList.remove('hidden');
-    progressCard.scrollIntoView({ behavior: 'smooth' });
+    const downloadUrl = `/api/download?videoUrl=${encodeURIComponent(videoUrl)}&formatCode=${encodeURIComponent(format.formatCode)}&filename=${encodeURIComponent(fileName)}`;
 
-    downloadFileName.textContent = fileName;
-    downloadPercentage.textContent = '0%';
-    progressBar.style.width = '0%';
-    downloadStatus.textContent = 'Merging video & audio with FFmpeg...';
+    if (progressCard) {
+      progressCard.classList.remove('hidden');
+      downloadFileName.textContent = fileName;
+      downloadPercentage.textContent = 'Starting...';
+      progressBar.style.width = '100%';
+      downloadStatus.textContent = '1-Tap Direct Stream Initiated!';
 
-    let percent = 0;
-    const interval = setInterval(() => {
-      percent += Math.floor(Math.random() * 10) + 5;
-      if (percent >= 100) {
-        percent = 100;
-        clearInterval(interval);
+      setTimeout(() => {
+        progressCard.classList.add('hidden');
+      }, 5000);
+    }
 
-        downloadPercentage.textContent = '100%';
-        progressBar.style.width = '100%';
-        downloadStatus.textContent = 'Download Complete!';
-
-        // Actual browser file download via ffmpeg stream endpoint
-        const downloadUrl = `/api/download?videoUrl=${encodeURIComponent(videoUrl)}&formatCode=${encodeURIComponent(format.formatCode)}&filename=${encodeURIComponent(fileName)}`;
-        const a = document.createElement('a');
-        a.href = downloadUrl;
-        a.download = fileName;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-
-        setTimeout(() => {
-          progressCard.classList.add('hidden');
-        }, 4500);
-      } else {
-        downloadPercentage.textContent = `${percent}%`;
-        progressBar.style.width = `${percent}%`;
-        downloadSpeed.textContent = `Speed: ${(Math.random() * 3 + 4).toFixed(1)} MB/s`;
-        downloadStatus.textContent = percent < 60 ? 'Downloading video & audio streams...' : 'Merging into playable MP4...';
-      }
-    }, 350);
+    window.location.href = downloadUrl;
   }
 });
