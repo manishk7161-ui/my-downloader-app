@@ -89,10 +89,10 @@ function getVideoMetadata(url, platform) {
           platform,
           videoId: videoId || Date.now().toString(),
           formats: [
-            { label: '1080p Full HD Video', quality: '1080p', type: 'video/mp4', formatCode: 'bestvideo[height<=1080]+bestaudio/best', ext: 'mp4' },
-            { label: '720p HD Video', quality: '720p', type: 'video/mp4', formatCode: 'bestvideo[height<=720]+bestaudio/best', ext: 'mp4' },
-            { label: '480p SD Video', quality: '480p', type: 'video/mp4', formatCode: 'bestvideo[height<=480]+bestaudio/best', ext: 'mp4' },
-            { label: '360p SD Video', quality: '360p', type: 'video/mp4', formatCode: 'bestvideo[height<=360]+bestaudio/best', ext: 'mp4' },
+            { label: '1080p Full HD Video', quality: '1080p', type: 'video/mp4', formatCode: 'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best', ext: 'mp4' },
+            { label: '720p HD Video', quality: '720p', type: 'video/mp4', formatCode: 'bestvideo[height<=720]+bestaudio/best[height<=720]/best', ext: 'mp4' },
+            { label: '480p SD Video', quality: '480p', type: 'video/mp4', formatCode: 'bestvideo[height<=480]+bestaudio/best[height<=480]/best', ext: 'mp4' },
+            { label: '360p SD Video', quality: '360p', type: 'video/mp4', formatCode: 'bestvideo[height<=360]+bestaudio/best[height<=360]/best', ext: 'mp4' },
             { label: 'Audio High Quality (MP3)', quality: 'Audio', type: 'audio/mp3', formatCode: 'bestaudio/best', ext: 'mp3' }
           ]
         });
@@ -124,7 +124,7 @@ function getVideoMetadata(url, platform) {
                 label,
                 quality: qTag,
                 type: 'video/mp4',
-                formatCode: `bestvideo[height<=${h}]+bestaudio/bestvideo+bestaudio/best[height<=${h}]/best`,
+                formatCode: `bestvideo[height<=${h}]+bestaudio/best[height<=${h}]/best`,
                 ext: 'mp4'
               });
             }
@@ -181,11 +181,10 @@ app.get('/api/download', async (req, res) => {
     return res.status(400).send('Missing videoUrl parameter.');
   }
 
-  const requestedFormat = formatCode || 'b/bestvideo+bestaudio/best';
-  const formatArg = `${requestedFormat}/b/bestvideo+bestaudio/best[ext=mp4]/best`;
+  const requestedFormat = formatCode || 'bestvideo+bestaudio/best';
+  const formatArg = `${requestedFormat}/best[ext=mp4]/b/bestvideo+bestaudio/best`;
   
   const args = [
-    '--ffmpeg-location', FFMPEG_DIR, 
     '--no-part', 
     '--concurrent-fragments', '1', 
     '--buffer-size', '16k', 
