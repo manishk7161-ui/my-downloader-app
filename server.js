@@ -99,10 +99,10 @@ function getVideoMetadata(url, platform) {
       }
 
       const formats = [
-        { label: '1080p Full HD Video', quality: '1080p', type: 'video/mp4', formatCode: 'b/best/ba*/bestvideo+bestaudio', ext: 'mp4' },
-        { label: '720p HD Video', quality: '720p', type: 'video/mp4', formatCode: 'b/best/ba*/bestvideo+bestaudio', ext: 'mp4' },
-        { label: '480p SD Video', quality: '480p', type: 'video/mp4', formatCode: 'b/best/ba*/bestvideo+bestaudio', ext: 'mp4' },
-        { label: 'Audio High Quality (MP3)', quality: 'Audio', type: 'audio/mp3', formatCode: 'bestaudio/ba*/best', ext: 'mp3' }
+        { label: '1080p Full HD Video', quality: '1080p', type: 'video/mp4', formatCode: 'best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/b[ext=mp4]/best', ext: 'mp4' },
+        { label: '720p HD Video', quality: '720p', type: 'video/mp4', formatCode: 'best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/b[ext=mp4]/best', ext: 'mp4' },
+        { label: '480p SD Video', quality: '480p', type: 'video/mp4', formatCode: 'best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/b[ext=mp4]/best', ext: 'mp4' },
+        { label: 'Audio High Quality (MP3)', quality: 'Audio', type: 'audio/mp3', formatCode: 'bestaudio[ext=m4a]/bestaudio/best', ext: 'mp3' }
       ];
 
       resolve({
@@ -144,7 +144,7 @@ app.get('/api/download', (req, res) => {
     return res.status(400).send('Missing videoUrl parameter.');
   }
 
-  const formatArg = ext === 'mp3' ? 'bestaudio/ba*/best' : 'b/best/ba*/bestvideo+bestaudio';
+  const formatArg = ext === 'mp3' ? 'bestaudio[ext=m4a]/bestaudio/best' : 'best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/b[ext=mp4]/best';
 
   execFile(YTDLP_PATH, ['-g', '-f', formatArg, videoUrl], { timeout: 15000 }, (err, stdout) => {
     if (!err && stdout && stdout.trim()) {
@@ -155,7 +155,7 @@ app.get('/api/download', (req, res) => {
         return client.get(cdnUrl, (cdnRes) => {
           if (cdnRes.statusCode === 200 || cdnRes.statusCode === 206) {
             const headers = {
-              'Content-Type': ext === 'mp3' ? 'audio/mpeg' : (cdnRes.headers['content-type'] || 'video/mp4'),
+              'Content-Type': ext === 'mp3' ? 'audio/mpeg' : 'video/mp4',
               'Content-Disposition': `attachment; filename="${safeFilename}"`
             };
             if (cdnRes.headers['content-length']) {
