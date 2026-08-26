@@ -115,7 +115,7 @@ document.addEventListener('DOMContentLoaded', () => {
           </div>
           <div class="truncate">
             <h5 class="text-xs font-bold text-slate-200 truncate">${fmt.label}</h5>
-            <p class="text-[10px] text-emerald-400 font-medium">1-Tap Direct MP4 Download</p>
+            <p class="text-[10px] text-emerald-400 font-medium">1-Tap System Download</p>
           </div>
         </div>
         <button class="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white text-xs font-extrabold px-4 py-2 rounded-xl shadow-md flex items-center space-x-1.5 transition shrink-0">
@@ -147,13 +147,22 @@ document.addEventListener('DOMContentLoaded', () => {
       downloadFileName.textContent = fileName;
       downloadPercentage.textContent = 'Starting...';
       progressBar.style.width = '100%';
-      downloadStatus.textContent = '1-Tap Direct Stream Initiated!';
+      downloadStatus.textContent = 'Downloading to Device Storage...';
 
       setTimeout(() => {
         progressCard.classList.add('hidden');
       }, 5000);
     }
 
-    window.location.href = downloadUrl;
+    const a = document.createElement('a');
+    a.href = downloadUrl;
+    a.download = fileName;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      document.body.removeChild(a);
+    }, 1000);
   }
 });
