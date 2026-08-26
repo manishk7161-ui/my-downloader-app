@@ -194,18 +194,28 @@ app.get('/api/download', async (req, res) => {
     videoUrl
   ];
 
-  console.log(`Piping ultra-light stream for ${safeFilename}...`);
+  console.log(`Piping chunked stream for ${safeFilename}...`);
   const ytProcess = spawn(YTDLP_PATH, args);
 
   let headerSent = false;
 
-  ytProcess.stdout.once('data', (firstChunk) => {
+  ytProcess.stdout.on('data', (chunk) => {
     if (!headerSent) {
       headerSent = true;
-      res.setHeader('Content-Type', ext === 'mp3' ? 'audio/mpeg' : 'video/mp4');
-      res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
-      res.write(firstChunk);
-      ytProcess.stdout.pipe(res);
+      res.writeHead(200, {
+        'Content-Type': ext === 'mp3' ? 'audio/mpeg' : 'video/mp4',
+        'Content-Disposition': `attachment; filename="${safeFilename}"`,
+        'Transfer-Encoding': 'chunked',
+        'Connection': 'keep-alive',
+        'Cache-Control': 'no-cache'
+      });
+    }
+    res.write(chunk);
+  });
+
+  ytProcess.stdout.on('end', () => {
+    if (headerSent) {
+      res.end();
     }
   });
 
