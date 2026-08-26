@@ -10,13 +10,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const platformTag = document.getElementById('platformTag');
   const qualityOptions = document.getElementById('qualityOptions');
 
-  const progressCard = document.getElementById('progressCard');
-  const downloadFileName = document.getElementById('downloadFileName');
-  const downloadPercentage = document.getElementById('downloadPercentage');
-  const progressBar = document.getElementById('progressBar');
-  const downloadSpeed = document.getElementById('downloadSpeed');
-  const downloadStatus = document.getElementById('downloadStatus');
-
   const shareWhatsappBtn = document.getElementById('shareWhatsappBtn');
   const pwaInstallBtn = document.getElementById('pwaInstallBtn');
 
@@ -106,8 +99,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     qualityOptions.innerHTML = '';
     data.formats.forEach((fmt) => {
+      const cleanTitle = (data.title || 'video').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 30);
+      const fileName = `${cleanTitle}_${fmt.quality}.${fmt.ext}`;
+      const downloadUrl = `/api/download?videoUrl=${encodeURIComponent(originalUrl)}&formatCode=${encodeURIComponent(fmt.formatCode)}&filename=${encodeURIComponent(fileName)}`;
+
       const optionCard = document.createElement('div');
-      optionCard.className = 'quality-option-card flex items-center justify-between p-3.5 bg-slate-900 border border-slate-800 rounded-xl cursor-pointer shadow-sm';
+      optionCard.className = 'quality-option-card flex items-center justify-between p-3.5 bg-slate-900 border border-slate-800 rounded-xl shadow-sm hover:border-indigo-600/50 transition';
       optionCard.innerHTML = `
         <div class="flex items-center space-x-3 overflow-hidden">
           <div class="w-9 h-9 rounded-xl bg-indigo-950/80 border border-indigo-700/50 flex items-center justify-center text-indigo-400 text-sm shrink-0">
@@ -115,54 +112,23 @@ document.addEventListener('DOMContentLoaded', () => {
           </div>
           <div class="truncate">
             <h5 class="text-xs font-bold text-slate-200 truncate">${fmt.label}</h5>
-            <p class="text-[10px] text-emerald-400 font-medium">1-Tap System Download</p>
+            <p class="text-[10px] text-emerald-400 font-medium">Direct MP4 Download</p>
           </div>
         </div>
-        <button class="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white text-xs font-extrabold px-4 py-2 rounded-xl shadow-md flex items-center space-x-1.5 transition shrink-0">
+        <a 
+          href="${downloadUrl}" 
+          download="${fileName}"
+          class="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white text-xs font-extrabold px-4 py-2.5 rounded-xl shadow-md flex items-center space-x-1.5 transition shrink-0 cursor-pointer"
+        >
           <i class="fa-solid fa-download"></i>
           <span>Download</span>
-        </button>
+        </a>
       `;
-
-      optionCard.querySelector('button').addEventListener('click', (e) => {
-        e.stopPropagation();
-        triggerDownload(originalUrl, data.title, fmt);
-      });
 
       qualityOptions.appendChild(optionCard);
     });
 
     previewCard.classList.remove('hidden');
     previewCard.scrollIntoView({ behavior: 'smooth' });
-  }
-
-  function triggerDownload(videoUrl, title, format) {
-    const cleanTitle = (title || 'video').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 30);
-    const fileName = `${cleanTitle}_${format.quality}.${format.ext}`;
-
-    const downloadUrl = `/api/download?videoUrl=${encodeURIComponent(videoUrl)}&formatCode=${encodeURIComponent(format.formatCode)}&filename=${encodeURIComponent(fileName)}`;
-
-    if (progressCard) {
-      progressCard.classList.remove('hidden');
-      downloadFileName.textContent = fileName;
-      downloadPercentage.textContent = 'Starting...';
-      progressBar.style.width = '100%';
-      downloadStatus.textContent = 'Downloading to Device Storage...';
-
-      setTimeout(() => {
-        progressCard.classList.add('hidden');
-      }, 5000);
-    }
-
-    const a = document.createElement('a');
-    a.href = downloadUrl;
-    a.download = fileName;
-    a.target = '_blank';
-    a.rel = 'noopener noreferrer';
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => {
-      document.body.removeChild(a);
-    }, 1000);
   }
 });
