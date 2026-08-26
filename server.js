@@ -3,24 +3,18 @@ const cors = require('cors');
 const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
-const http = require('http');
-const https = require('https');
-const { execFile, spawn } = require('child_process');
-
-let ffmpegStaticPath = null;
-try {
-  ffmpegStaticPath = require('ffmpeg-static');
-} catch (e) {}
+const { execFile } = require('child_process');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const BIN_DIR = path.join(__dirname, 'bin');
+const TEMP_DIR = path.join(__dirname, 'temp_downloads');
 
 if (!fs.existsSync(BIN_DIR)) fs.mkdirSync(BIN_DIR, { recursive: true });
+if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
 const isWin = process.platform === 'win32';
 const YTDLP_PATH = path.join(BIN_DIR, isWin ? 'yt-dlp.exe' : 'yt-dlp');
-const FFMPEG_DIR = ffmpegStaticPath ? path.dirname(ffmpegStaticPath) : BIN_DIR;
 
 async function ensureYtdlp() {
   try {
@@ -55,6 +49,7 @@ possiblePaths.forEach(p => {
   }
 });
 
+// Explicit Homepage Route (Fixes 'Cannot GET /' error 100%)
 app.get('/', (req, res) => {
   const possibleIndexFiles = [
     path.join(__dirname, 'src/index.html'),
@@ -81,37 +76,46 @@ function detectPlatform(url) {
 
 function getVideoMetadata(url, platform) {
   return new Promise((resolve, reject) => {
-    execFile(YTDLP_PATH, ['-j', '--no-playlist', url], { maxBuffer: 15 * 1024 * 1024 }, (err, stdout) => {
-      let title = `${platform.toUpperCase()} Video`;
-      let thumbnail = `https://via.placeholder.com/300x300?text=${platform.toUpperCase()}`;
-
-      if (!err && stdout) {
-        try {
-          const info = JSON.parse(stdout);
-          if (info.title) title = info.title;
-          if (info.thumbnail) thumbnail = info.thumbnail;
-        } catch (e) {}
+    execFile(YTDLP_PATH, ['-j', '--no-playlist', url], { maxBuffer: 10 * 1024 * 1024 }, (err, stdout) => {
+      if (err || !stdout) {
+        if (platform === 'youtube') {
+          const videoIdMatch = url.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|shorts\/|live\/|watch\?.+&v=))([\w-]{11})/i);
+          const videoId = videoIdMatch ? videoIdMatch[1] : 'video';
+          return resolve({
+            title: 'YouTube HD Video',
+            thumbnail: `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
+            platform: 'youtube',
+            videoId,
+            formats: [
+              { label: '1080p Full HD (Merged Playable MP4)', quality: '1080p', type: 'video/mp4', formatCode: 'bestvideo[height<=1080]+bestaudio/best[ext=mp4]/best', ext: 'mp4' },
+              { label: '720p HD (Playable MP4)', quality: '720p', type: 'video/mp4', formatCode: 'bestvideo[height<=720]+bestaudio/best[ext=mp4]/best', ext: 'mp4' },
+              { label: 'Audio High Quality (MP3)', quality: 'Audio', type: 'audio/mp3', formatCode: 'bestaudio/best', ext: 'mp3' }
+            ]
+          });
+        }
+        return reject(new Error('Could not fetch video information. Please check link.'));
       }
 
-      if (platform === 'youtube' && thumbnail.includes('placeholder')) {
-        const videoIdMatch = url.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|shorts\/|live\/|watch\?.+&v=))([\w-]{11})/i);
-        if (videoIdMatch) thumbnail = `https://img.youtube.com/vi/${videoIdMatch[1]}/hqdefault.jpg`;
+      try {
+        const info = JSON.parse(stdout);
+        const title = info.title || `${platform.toUpperCase()} Video`;
+        const thumbnail = info.thumbnail || `https://via.placeholder.com/300x300?text=${platform.toUpperCase()}`;
+
+        resolve({
+          title,
+          thumbnail,
+          platform,
+          videoId: info.id || Date.now().toString(),
+          formats: [
+            { label: '1080p Full HD (Merged Playable MP4)', quality: '1080p', type: 'video/mp4', formatCode: 'bestvideo[height<=1080]+bestaudio/best[ext=mp4]/best', ext: 'mp4' },
+            { label: '720p HD (Merged Playable MP4)', quality: '720p', type: 'video/mp4', formatCode: 'bestvideo[height<=720]+bestaudio/best[ext=mp4]/best', ext: 'mp4' },
+            { label: '480p Standard (Playable MP4)', quality: '480p', type: 'video/mp4', formatCode: 'bestvideo[height<=480]+bestaudio/best[ext=mp4]/best', ext: 'mp4' },
+            { label: 'Audio High Quality (MP3)', quality: 'Audio', type: 'audio/mp3', formatCode: 'bestaudio/best', ext: 'mp3' }
+          ]
+        });
+      } catch (e) {
+        reject(new Error('Failed to parse video info.'));
       }
-
-      const formats = [
-        { label: '1080p Full HD Video', quality: '1080p', type: 'video/mp4', formatCode: 'bestvideo[height<=1080]+bestaudio/best', ext: 'mp4' },
-        { label: '720p HD Video', quality: '720p', type: 'video/mp4', formatCode: 'bestvideo[height<=720]+bestaudio/best', ext: 'mp4' },
-        { label: '480p SD Video', quality: '480p', type: 'video/mp4', formatCode: 'bestvideo[height<=480]+bestaudio/best', ext: 'mp4' },
-        { label: 'Audio High Quality (MP3)', quality: 'Audio', type: 'audio/mp3', formatCode: 'bestaudio/best', ext: 'mp3' }
-      ];
-
-      resolve({
-        title,
-        thumbnail,
-        platform,
-        videoId: Date.now().toString(),
-        formats
-      });
     });
   });
 }
@@ -138,68 +142,33 @@ app.post('/api/parse', async (req, res) => {
 app.get('/api/download', (req, res) => {
   const { videoUrl, formatCode, filename } = req.query;
   const safeFilename = (filename || 'downloaded_video.mp4').replace(/[^a-zA-Z0-9_.-]/g, '_');
+  const tempFileId = Date.now() + '_' + Math.random().toString(36).substring(7);
   const ext = safeFilename.endsWith('.mp3') ? 'mp3' : 'mp4';
+  const targetFilePath = path.join(TEMP_DIR, `${tempFileId}.${ext}`);
 
   if (!videoUrl) {
     return res.status(400).send('Missing videoUrl parameter.');
   }
 
-  const requestedFormat = formatCode || 'bestvideo+bestaudio/best';
-  const formatArg = `${requestedFormat}/best[ext=mp4]/b/bestvideo+bestaudio/best`;
+  const selectedFormat = formatCode || 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best';
+  const args = ['--no-part', '--merge-output-format', ext, '-f', selectedFormat, '-o', targetFilePath, videoUrl];
 
-  execFile(YTDLP_PATH, ['-g', '-f', formatArg, videoUrl], { timeout: 15000 }, (err, stdout) => {
-    if (!err && stdout && stdout.trim()) {
-      const urls = stdout.trim().split('\n');
-      const cdnUrl = urls[0];
-      if (cdnUrl && cdnUrl.startsWith('http')) {
-        const client = cdnUrl.startsWith('https') ? https : http;
-        return client.get(cdnUrl, (cdnRes) => {
-          if (cdnRes.statusCode === 200) {
-            const headers = {
-              'Content-Type': ext === 'mp3' ? 'audio/mpeg' : (cdnRes.headers['content-type'] || 'video/mp4'),
-              'Content-Disposition': `attachment; filename="${safeFilename}"`
-            };
-            if (cdnRes.headers['content-length']) {
-              headers['Content-Length'] = cdnRes.headers['content-length'];
-            }
-            res.writeHead(200, headers);
-            return cdnRes.pipe(res);
-          }
-          fallbackStream();
-        }).on('error', () => {
-          fallbackStream();
-        });
-      }
+  execFile(YTDLP_PATH, args, { timeout: 180000 }, (err, stdout, stderr) => {
+    if (err || !fs.existsSync(targetFilePath)) {
+      console.error('Download/Merge Error:', err || stderr);
+      return res.status(500).send('Failed to process video file.');
     }
-    fallbackStream();
+
+    res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
+    res.setHeader('Content-Type', ext === 'mp3' ? 'audio/mpeg' : 'video/mp4');
+
+    const fileStream = fs.createReadStream(targetFilePath);
+    fileStream.pipe(res);
+
+    res.on('finish', () => {
+      fs.unlink(targetFilePath, () => {});
+    });
   });
-
-  function fallbackStream() {
-    const args = ['--no-part', '-f', formatArg, '-o', '-', videoUrl];
-    const ytProcess = spawn(YTDLP_PATH, args);
-
-    let headerSent = false;
-    ytProcess.stdout.on('data', (chunk) => {
-      if (!headerSent) {
-        headerSent = true;
-        res.writeHead(200, {
-          'Content-Type': ext === 'mp3' ? 'audio/mpeg' : 'video/mp4',
-          'Content-Disposition': `attachment; filename="${safeFilename}"`
-        });
-      }
-      res.write(chunk);
-    });
-
-    ytProcess.stdout.on('end', () => {
-      if (headerSent) res.end();
-    });
-
-    ytProcess.on('exit', () => {
-      if (!headerSent && !res.headersSent) {
-        return res.status(500).send('Download error. Please try again.');
-      }
-    });
-  }
 });
 
 app.listen(PORT, () => {
