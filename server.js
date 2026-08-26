@@ -84,12 +84,8 @@ function getVideoMetadata(url, platform) {
             platform: 'youtube',
             videoId,
             formats: [
-              { label: '4K Ultra HD (2160p)', quality: '4K', type: 'video/mp4', formatCode: 'bestvideo[vcodec^=avc1][height<=2160]+bestaudio[acodec^=mp4a]/bestvideo[height<=2160]+bestaudio/best[ext=mp4]/best', ext: 'mp4' },
-              { label: '2K Quad HD (1440p)', quality: '2K', type: 'video/mp4', formatCode: 'bestvideo[vcodec^=avc1][height<=1440]+bestaudio[acodec^=mp4a]/bestvideo[height<=1440]+bestaudio/best[ext=mp4]/best', ext: 'mp4' },
-              { label: '1080p Full HD', quality: '1080p', type: 'video/mp4', formatCode: 'bestvideo[vcodec^=avc1][height<=1080]+bestaudio[acodec^=mp4a]/bestvideo[height<=1080]+bestaudio/best[ext=mp4]/best', ext: 'mp4' },
-              { label: '720p HD', quality: '720p', type: 'video/mp4', formatCode: 'bestvideo[vcodec^=avc1][height<=720]+bestaudio[acodec^=mp4a]/bestvideo[height<=720]+bestaudio/best[ext=mp4]/best', ext: 'mp4' },
-              { label: '480p SD', quality: '480p', type: 'video/mp4', formatCode: 'bestvideo[vcodec^=avc1][height<=480]+bestaudio[acodec^=mp4a]/bestvideo[height<=480]+bestaudio/best[ext=mp4]/best', ext: 'mp4' },
-              { label: 'Audio High Quality (MP3)', quality: 'Audio', type: 'audio/mp3', formatCode: 'bestaudio[ext=m4a]/bestaudio/best', ext: 'mp3' }
+              { label: '720p HD Video', quality: '720p', type: 'video/mp4', formatCode: 'bestvideo[height<=720]+bestaudio/best', ext: 'mp4' },
+              { label: 'Audio High Quality (MP3)', quality: 'Audio', type: 'audio/mp3', formatCode: 'bestaudio/best', ext: 'mp3' }
             ]
           });
         }
@@ -105,17 +101,24 @@ function getVideoMetadata(url, platform) {
         const formats = [];
         const seenQualities = new Set();
 
-        const heights = [2160, 1440, 1080, 720, 480, 360, 240];
-        heights.forEach(h => {
-          const hasHeight = rawFormats.some(f => f.height === h || (f.height && Math.abs(f.height - h) < 40));
-          if (hasHeight || h === 720 || h === 1080) {
-            let label = `${h}p SD`;
-            let qTag = `${h}p`;
-            if (h >= 2160) { label = '4K Ultra HD (2160p)'; qTag = '4K'; }
-            else if (h >= 1440) { label = '2K Quad HD (1440p)'; qTag = '2K'; }
-            else if (h >= 1080) { label = '1080p Full HD'; qTag = '1080p'; }
-            else if (h >= 720) { label = '720p HD'; qTag = '720p'; }
-            else if (h >= 480) { label = '480p SD'; qTag = '480p'; }
+        const availableHeights = Array.from(new Set(
+          rawFormats
+            .map(f => f.height)
+            .filter(h => h && h >= 144)
+            .sort((a, b) => b - a)
+        ));
+
+        const targetHeights = [2160, 1440, 1080, 720, 480, 360, 240, 144];
+        targetHeights.forEach(h => {
+          const matched = availableHeights.find(ah => Math.abs(ah - h) <= (h > 720 ? 100 : 35));
+          if (matched) {
+            let label = `${matched}p SD`;
+            let qTag = `${matched}p`;
+            if (matched >= 2160) { label = '4K Ultra HD (2160p)'; qTag = '4K'; }
+            else if (matched >= 1440) { label = '2K Quad HD (1440p)'; qTag = '2K'; }
+            else if (matched >= 1080) { label = '1080p Full HD'; qTag = '1080p'; }
+            else if (matched >= 720) { label = '720p HD'; qTag = '720p'; }
+            else if (matched >= 480) { label = '480p SD'; qTag = '480p'; }
 
             if (!seenQualities.has(label)) {
               seenQualities.add(label);
@@ -123,12 +126,22 @@ function getVideoMetadata(url, platform) {
                 label,
                 quality: qTag,
                 type: 'video/mp4',
-                formatCode: `bestvideo[vcodec^=avc1][height<=${h}]+bestaudio[acodec^=mp4a]/bestvideo[height<=${h}]+bestaudio/best[height<=${h}][ext=mp4]/best`,
+                formatCode: `bestvideo[height<=${matched}][vcodec^=avc1]+bestaudio[acodec^=mp4a]/bestvideo[height<=${matched}]+bestaudio/best[height<=${matched}]/best`,
                 ext: 'mp4'
               });
             }
           }
         });
+
+        if (formats.length === 0) {
+          formats.push({
+            label: 'HD Video (Best Quality)',
+            quality: 'HD',
+            type: 'video/mp4',
+            formatCode: 'bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/bestvideo+bestaudio/best[ext=mp4]/best',
+            ext: 'mp4'
+          });
+        }
 
         formats.push({
           label: 'Audio High Quality (MP3)',
@@ -183,10 +196,11 @@ app.get('/api/download', (req, res) => {
   res.setHeader('Content-Type', ext === 'mp3' ? 'audio/mpeg' : 'video/mp4');
   res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
 
-  const selectedFormat = formatCode || 'bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/bestvideo+bestaudio/best[ext=mp4]/best';
-  const args = ['--ffmpeg-location', BIN_DIR, '--no-part', '-f', selectedFormat, '-o', '-', videoUrl];
+  const requestedFormat = formatCode || 'bestvideo+bestaudio/best';
+  const formatArg = `${requestedFormat}/bestvideo+bestaudio/best[ext=mp4]/best`;
+  const args = ['--ffmpeg-location', BIN_DIR, '--no-part', '-f', formatArg, '-o', '-', videoUrl];
 
-  console.log(`Piping direct H.264 MP4 stream for ${safeFilename}...`);
+  console.log(`Piping direct stream for ${safeFilename}...`);
   const ytProcess = spawn(YTDLP_PATH, args);
 
   ytProcess.stdout.pipe(res);
