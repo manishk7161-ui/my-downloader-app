@@ -5,6 +5,11 @@ const path = require('path');
 const fs = require('fs');
 const { execFile, spawn } = require('child_process');
 
+let ffmpegStaticPath = null;
+try {
+  ffmpegStaticPath = require('ffmpeg-static');
+} catch (e) {}
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 const BIN_DIR = path.join(__dirname, 'bin');
@@ -13,6 +18,7 @@ if (!fs.existsSync(BIN_DIR)) fs.mkdirSync(BIN_DIR, { recursive: true });
 
 const isWin = process.platform === 'win32';
 const YTDLP_PATH = path.join(BIN_DIR, isWin ? 'yt-dlp.exe' : 'yt-dlp');
+const FFMPEG_DIR = ffmpegStaticPath ? path.dirname(ffmpegStaticPath) : BIN_DIR;
 
 async function ensureYtdlp() {
   try {
@@ -71,25 +77,65 @@ function detectPlatform(url) {
   return 'unknown';
 }
 
+async function extractWithCobalt(url, platform) {
+  try {
+    const res = await axios.post('https://api.cobalt.tools/api/json', {
+      url: url,
+      videoQuality: 'max'
+    }, {
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      },
+      timeout: 12000
+    });
+
+    if (res.data && (res.data.url || (res.data.picker && res.data.picker.length > 0))) {
+      const mediaUrl = res.data.url || res.data.picker[0].url;
+      return {
+        title: `${platform.toUpperCase()} HD Video`,
+        thumbnail: `https://via.placeholder.com/400x400?text=${platform.toUpperCase()}+HD`,
+        platform: platform,
+        videoId: Date.now().toString(),
+        formats: [
+          { label: '1080p Full HD Video', quality: '1080p', type: 'video/mp4', directUrl: mediaUrl, ext: 'mp4' },
+          { label: '720p HD Video', quality: '720p', type: 'video/mp4', directUrl: mediaUrl, ext: 'mp4' },
+          { label: '480p SD Video', quality: '480p', type: 'video/mp4', directUrl: mediaUrl, ext: 'mp4' },
+          { label: 'Audio High Quality (MP3)', quality: 'Audio', type: 'audio/mp3', directUrl: mediaUrl, ext: 'mp3' }
+        ]
+      };
+    }
+  } catch (e) {
+    console.warn(`Cobalt extraction fallback failed for ${platform}:`, e.message);
+  }
+  return null;
+}
+
 function getVideoMetadata(url, platform) {
-  return new Promise((resolve, reject) => {
-    execFile(YTDLP_PATH, ['-j', '--no-playlist', url], { maxBuffer: 15 * 1024 * 1024 }, (err, stdout) => {
+  return new Promise(async (resolve, reject) => {
+    execFile(YTDLP_PATH, ['-j', '--no-playlist', url], { maxBuffer: 15 * 1024 * 1024 }, async (err, stdout) => {
       if (err || !stdout) {
-        if (platform === 'youtube') {
-          const videoIdMatch = url.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|shorts\/|live\/|watch\?.+&v=))([\w-]{11})/i);
-          const videoId = videoIdMatch ? videoIdMatch[1] : 'video';
-          return resolve({
-            title: 'YouTube HD Video',
-            thumbnail: `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
-            platform: 'youtube',
-            videoId,
-            formats: [
-              { label: '720p HD Video', quality: '720p', type: 'video/mp4', formatCode: 'bestvideo[height<=720]+bestaudio/best', ext: 'mp4' },
-              { label: 'Audio High Quality (MP3)', quality: 'Audio', type: 'audio/mp3', formatCode: 'bestaudio/best', ext: 'mp3' }
-            ]
-          });
+        if (platform === 'instagram' || platform === 'facebook') {
+          const cobaltData = await extractWithCobalt(url, platform);
+          if (cobaltData) return resolve(cobaltData);
         }
-        return reject(new Error('Could not fetch video details. Please check link.'));
+
+        const videoIdMatch = url.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|shorts\/|live\/|watch\?.+&v=))([\w-]{11})/i);
+        const videoId = videoIdMatch ? videoIdMatch[1] : 'video';
+        return resolve({
+          title: `${platform.toUpperCase()} Video`,
+          thumbnail: videoId ? `https://img.youtube.com/vi/${videoId}/hqdefault.jpg` : `https://via.placeholder.com/300x300?text=${platform.toUpperCase()}`,
+          platform,
+          videoId: videoId || Date.now().toString(),
+          formats: [
+            { label: '1080p Full HD Video', quality: '1080p', type: 'video/mp4', formatCode: 'bestvideo[height<=1080]+bestaudio/best', ext: 'mp4' },
+            { label: '720p HD Video', quality: '720p', type: 'video/mp4', formatCode: 'bestvideo[height<=720]+bestaudio/best', ext: 'mp4' },
+            { label: '480p SD Video', quality: '480p', type: 'video/mp4', formatCode: 'bestvideo[height<=480]+bestaudio/best', ext: 'mp4' },
+            { label: '360p SD Video', quality: '360p', type: 'video/mp4', formatCode: 'bestvideo[height<=360]+bestaudio/best', ext: 'mp4' },
+            { label: 'Audio High Quality (MP3)', quality: 'Audio', type: 'audio/mp3', formatCode: 'bestaudio/best', ext: 'mp3' }
+          ]
+        });
       }
 
       try {
@@ -101,24 +147,16 @@ function getVideoMetadata(url, platform) {
         const formats = [];
         const seenQualities = new Set();
 
-        const availableHeights = Array.from(new Set(
-          rawFormats
-            .map(f => f.height)
-            .filter(h => h && h >= 144)
-            .sort((a, b) => b - a)
-        ));
-
-        const targetHeights = [2160, 1440, 1080, 720, 480, 360, 240, 144];
-        targetHeights.forEach(h => {
-          const matched = availableHeights.find(ah => Math.abs(ah - h) <= (h > 720 ? 100 : 35));
-          if (matched) {
-            let label = `${matched}p SD`;
-            let qTag = `${matched}p`;
-            if (matched >= 2160) { label = '4K Ultra HD (2160p)'; qTag = '4K'; }
-            else if (matched >= 1440) { label = '2K Quad HD (1440p)'; qTag = '2K'; }
-            else if (matched >= 1080) { label = '1080p Full HD'; qTag = '1080p'; }
-            else if (matched >= 720) { label = '720p HD'; qTag = '720p'; }
-            else if (matched >= 480) { label = '480p SD'; qTag = '480p'; }
+        const heights = [2160, 1440, 1080, 720, 480, 360, 240, 144];
+        heights.forEach(h => {
+          const hasHeight = rawFormats.some(f => f && (f.height === h || (f.height && Math.abs(f.height - h) <= 40)));
+          if (hasHeight || h === 1080 || h === 720 || h === 480 || h === 360) {
+            let label = `${h}p SD Video`;
+            let qTag = `${h}p`;
+            if (h >= 2160) { label = '4K Ultra HD (2160p)'; qTag = '4K'; }
+            else if (h >= 1440) { label = '2K Quad HD (1440p)'; qTag = '2K'; }
+            else if (h >= 1080) { label = '1080p Full HD Video'; qTag = '1080p'; }
+            else if (h >= 720) { label = '720p HD Video'; qTag = '720p'; }
 
             if (!seenQualities.has(label)) {
               seenQualities.add(label);
@@ -126,28 +164,18 @@ function getVideoMetadata(url, platform) {
                 label,
                 quality: qTag,
                 type: 'video/mp4',
-                formatCode: `bestvideo[height<=${matched}][vcodec^=avc1]+bestaudio[acodec^=mp4a]/bestvideo[height<=${matched}]+bestaudio/best[height<=${matched}]/best`,
+                formatCode: `bestvideo[height<=${h}]+bestaudio/bestvideo+bestaudio/best[height<=${h}]/best`,
                 ext: 'mp4'
               });
             }
           }
         });
 
-        if (formats.length === 0) {
-          formats.push({
-            label: 'HD Video (Best Quality)',
-            quality: 'HD',
-            type: 'video/mp4',
-            formatCode: 'bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/bestvideo+bestaudio/best[ext=mp4]/best',
-            ext: 'mp4'
-          });
-        }
-
         formats.push({
           label: 'Audio High Quality (MP3)',
           quality: 'Audio',
           type: 'audio/mp3',
-          formatCode: 'bestaudio[ext=m4a]/bestaudio/best',
+          formatCode: 'bestaudio/best',
           ext: 'mp3'
         });
 
@@ -159,6 +187,10 @@ function getVideoMetadata(url, platform) {
           formats
         });
       } catch (e) {
+        if (platform === 'instagram' || platform === 'facebook') {
+          const cobaltData = await extractWithCobalt(url, platform);
+          if (cobaltData) return resolve(cobaltData);
+        }
         reject(new Error('Failed to parse video info.'));
       }
     });
@@ -184,30 +216,50 @@ app.post('/api/parse', async (req, res) => {
   }
 });
 
-app.get('/api/download', (req, res) => {
-  const { videoUrl, formatCode, filename } = req.query;
+app.get('/api/download', async (req, res) => {
+  const { videoUrl, formatCode, filename, directUrl } = req.query;
   const safeFilename = (filename || 'downloaded_video.mp4').replace(/[^a-zA-Z0-9_.-]/g, '_');
   const ext = safeFilename.endsWith('.mp3') ? 'mp3' : 'mp4';
+
+  if (directUrl) {
+    return res.redirect(directUrl);
+  }
 
   if (!videoUrl) {
     return res.status(400).send('Missing videoUrl parameter.');
   }
 
-  res.setHeader('Content-Type', ext === 'mp3' ? 'audio/mpeg' : 'video/mp4');
-  res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
-
   const requestedFormat = formatCode || 'bestvideo+bestaudio/best';
   const formatArg = `${requestedFormat}/bestvideo+bestaudio/best[ext=mp4]/best`;
-  const args = ['--ffmpeg-location', BIN_DIR, '--no-part', '-f', formatArg, '-o', '-', videoUrl];
+  const args = ['--ffmpeg-location', FFMPEG_DIR, '--no-part', '-f', formatArg, '-o', '-', videoUrl];
 
   console.log(`Piping direct stream for ${safeFilename}...`);
   const ytProcess = spawn(YTDLP_PATH, args);
 
-  ytProcess.stdout.pipe(res);
+  let headerSent = false;
+
+  ytProcess.stdout.once('data', (firstChunk) => {
+    if (!headerSent) {
+      headerSent = true;
+      res.setHeader('Content-Type', ext === 'mp3' ? 'audio/mpeg' : 'video/mp4');
+      res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
+      res.write(firstChunk);
+      ytProcess.stdout.pipe(res);
+    }
+  });
 
   ytProcess.stderr.on('data', (d) => {
     const msg = d.toString();
     if (msg.includes('ERROR:')) console.error('yt-dlp stream error:', msg);
+  });
+
+  ytProcess.on('exit', (code) => {
+    if (!headerSent) {
+      console.error('yt-dlp exited before sending video data, code:', code);
+      if (!res.headersSent) {
+        return res.status(500).send('Download error. Please try again or check video link.');
+      }
+    }
   });
 
   req.on('close', () => {
