@@ -3,7 +3,14 @@ const cors = require('cors');
 const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
+const http = require('http');
+const https = require('https');
 const { execFile, spawn } = require('child_process');
+
+let ffmpegStaticPath = null;
+try {
+  ffmpegStaticPath = require('ffmpeg-static');
+} catch (e) {}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -13,6 +20,7 @@ if (!fs.existsSync(BIN_DIR)) fs.mkdirSync(BIN_DIR, { recursive: true });
 
 const isWin = process.platform === 'win32';
 const YTDLP_PATH = path.join(BIN_DIR, isWin ? 'yt-dlp.exe' : 'yt-dlp');
+const FFMPEG_DIR = ffmpegStaticPath ? path.dirname(ffmpegStaticPath) : BIN_DIR;
 
 async function ensureYtdlp() {
   try {
@@ -91,9 +99,9 @@ function getVideoMetadata(url, platform) {
       }
 
       const formats = [
-        { label: '1080p Full HD Video', quality: '1080p', type: 'video/mp4', formatCode: 'best[ext=mp4]/best', ext: 'mp4' },
-        { label: '720p HD Video', quality: '720p', type: 'video/mp4', formatCode: 'best[ext=mp4]/best', ext: 'mp4' },
-        { label: '480p SD Video', quality: '480p', type: 'video/mp4', formatCode: 'best[ext=mp4]/best', ext: 'mp4' },
+        { label: '1080p Full HD Video', quality: '1080p', type: 'video/mp4', formatCode: 'bestvideo[height<=1080]+bestaudio/best', ext: 'mp4' },
+        { label: '720p HD Video', quality: '720p', type: 'video/mp4', formatCode: 'bestvideo[height<=720]+bestaudio/best', ext: 'mp4' },
+        { label: '480p SD Video', quality: '480p', type: 'video/mp4', formatCode: 'bestvideo[height<=480]+bestaudio/best', ext: 'mp4' },
         { label: 'Audio High Quality (MP3)', quality: 'Audio', type: 'audio/mp3', formatCode: 'bestaudio/best', ext: 'mp3' }
       ];
 
@@ -128,7 +136,7 @@ app.post('/api/parse', async (req, res) => {
 });
 
 app.get('/api/download', (req, res) => {
-  const { videoUrl, filename } = req.query;
+  const { videoUrl, formatCode, filename } = req.query;
   const safeFilename = (filename || 'downloaded_video.mp4').replace(/[^a-zA-Z0-9_.-]/g, '_');
   const ext = safeFilename.endsWith('.mp3') ? 'mp3' : 'mp4';
 
@@ -136,32 +144,62 @@ app.get('/api/download', (req, res) => {
     return res.status(400).send('Missing videoUrl parameter.');
   }
 
-  execFile(YTDLP_PATH, ['-g', '-f', 'best[ext=mp4]/best', videoUrl], { timeout: 15000 }, (err, stdout) => {
+  const requestedFormat = formatCode || 'bestvideo+bestaudio/best';
+  const formatArg = `${requestedFormat}/best[ext=mp4]/b/bestvideo+bestaudio/best`;
+
+  execFile(YTDLP_PATH, ['-g', '-f', formatArg, videoUrl], { timeout: 15000 }, (err, stdout) => {
     if (!err && stdout && stdout.trim()) {
       const urls = stdout.trim().split('\n');
-      const directCdnUrl = urls[0];
-      if (directCdnUrl && directCdnUrl.startsWith('http')) {
-        return res.redirect(302, directCdnUrl);
+      const cdnUrl = urls[0];
+      if (cdnUrl && cdnUrl.startsWith('http')) {
+        const client = cdnUrl.startsWith('https') ? https : http;
+        return client.get(cdnUrl, (cdnRes) => {
+          if (cdnRes.statusCode === 200) {
+            const headers = {
+              'Content-Type': ext === 'mp3' ? 'audio/mpeg' : (cdnRes.headers['content-type'] || 'video/mp4'),
+              'Content-Disposition': `attachment; filename="${safeFilename}"`
+            };
+            if (cdnRes.headers['content-length']) {
+              headers['Content-Length'] = cdnRes.headers['content-length'];
+            }
+            res.writeHead(200, headers);
+            return cdnRes.pipe(res);
+          }
+          fallbackStream();
+        }).on('error', () => {
+          fallbackStream();
+        });
       }
     }
+    fallbackStream();
+  });
 
-    res.setHeader('Content-Type', ext === 'mp3' ? 'audio/mpeg' : 'video/mp4');
-    res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
-
-    const args = ['--no-part', '-f', 'best[ext=mp4]/best', '-o', '-', videoUrl];
+  function fallbackStream() {
+    const args = ['--no-part', '-f', formatArg, '-o', '-', videoUrl];
     const ytProcess = spawn(YTDLP_PATH, args);
 
-    ytProcess.stdout.pipe(res);
-
-    ytProcess.stderr.on('data', (d) => {
-      const msg = d.toString();
-      if (msg.includes('ERROR:')) console.error('yt-dlp stream error:', msg);
+    let headerSent = false;
+    ytProcess.stdout.on('data', (chunk) => {
+      if (!headerSent) {
+        headerSent = true;
+        res.writeHead(200, {
+          'Content-Type': ext === 'mp3' ? 'audio/mpeg' : 'video/mp4',
+          'Content-Disposition': `attachment; filename="${safeFilename}"`
+        });
+      }
+      res.write(chunk);
     });
 
-    req.on('close', () => {
-      try { ytProcess.kill(); } catch (e) {}
+    ytProcess.stdout.on('end', () => {
+      if (headerSent) res.end();
     });
-  });
+
+    ytProcess.on('exit', () => {
+      if (!headerSent && !res.headersSent) {
+        return res.status(500).send('Download error. Please try again.');
+      }
+    });
+  }
 });
 
 app.listen(PORT, () => {
