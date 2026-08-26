@@ -77,50 +77,10 @@ function detectPlatform(url) {
   return 'unknown';
 }
 
-async function extractWithCobalt(url, platform) {
-  try {
-    const res = await axios.post('https://api.cobalt.tools/api/json', {
-      url: url,
-      videoQuality: 'max'
-    }, {
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      },
-      timeout: 12000
-    });
-
-    if (res.data && (res.data.url || (res.data.picker && res.data.picker.length > 0))) {
-      const mediaUrl = res.data.url || res.data.picker[0].url;
-      return {
-        title: `${platform.toUpperCase()} HD Video`,
-        thumbnail: `https://via.placeholder.com/400x400?text=${platform.toUpperCase()}+HD`,
-        platform: platform,
-        videoId: Date.now().toString(),
-        formats: [
-          { label: '1080p Full HD Video', quality: '1080p', type: 'video/mp4', directUrl: mediaUrl, ext: 'mp4' },
-          { label: '720p HD Video', quality: '720p', type: 'video/mp4', directUrl: mediaUrl, ext: 'mp4' },
-          { label: '480p SD Video', quality: '480p', type: 'video/mp4', directUrl: mediaUrl, ext: 'mp4' },
-          { label: 'Audio High Quality (MP3)', quality: 'Audio', type: 'audio/mp3', directUrl: mediaUrl, ext: 'mp3' }
-        ]
-      };
-    }
-  } catch (e) {
-    console.warn(`Cobalt extraction fallback failed for ${platform}:`, e.message);
-  }
-  return null;
-}
-
 function getVideoMetadata(url, platform) {
-  return new Promise(async (resolve, reject) => {
-    execFile(YTDLP_PATH, ['-j', '--no-playlist', url], { maxBuffer: 15 * 1024 * 1024 }, async (err, stdout) => {
+  return new Promise((resolve, reject) => {
+    execFile(YTDLP_PATH, ['-j', '--no-playlist', url], { maxBuffer: 15 * 1024 * 1024 }, (err, stdout) => {
       if (err || !stdout) {
-        if (platform === 'instagram' || platform === 'facebook') {
-          const cobaltData = await extractWithCobalt(url, platform);
-          if (cobaltData) return resolve(cobaltData);
-        }
-
         const videoIdMatch = url.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|shorts\/|live\/|watch\?.+&v=))([\w-]{11})/i);
         const videoId = videoIdMatch ? videoIdMatch[1] : 'video';
         return resolve({
@@ -187,10 +147,6 @@ function getVideoMetadata(url, platform) {
           formats
         });
       } catch (e) {
-        if (platform === 'instagram' || platform === 'facebook') {
-          const cobaltData = await extractWithCobalt(url, platform);
-          if (cobaltData) return resolve(cobaltData);
-        }
         reject(new Error('Failed to parse video info.'));
       }
     });
@@ -217,23 +173,28 @@ app.post('/api/parse', async (req, res) => {
 });
 
 app.get('/api/download', async (req, res) => {
-  const { videoUrl, formatCode, filename, directUrl } = req.query;
+  const { videoUrl, formatCode, filename } = req.query;
   const safeFilename = (filename || 'downloaded_video.mp4').replace(/[^a-zA-Z0-9_.-]/g, '_');
   const ext = safeFilename.endsWith('.mp3') ? 'mp3' : 'mp4';
-
-  if (directUrl) {
-    return res.redirect(directUrl);
-  }
 
   if (!videoUrl) {
     return res.status(400).send('Missing videoUrl parameter.');
   }
 
-  const requestedFormat = formatCode || 'bestvideo+bestaudio/best';
-  const formatArg = `${requestedFormat}/bestvideo+bestaudio/best[ext=mp4]/best`;
-  const args = ['--ffmpeg-location', FFMPEG_DIR, '--no-part', '-f', formatArg, '-o', '-', videoUrl];
+  const requestedFormat = formatCode || 'b/bestvideo+bestaudio/best';
+  const formatArg = `${requestedFormat}/b/bestvideo+bestaudio/best[ext=mp4]/best`;
+  
+  const args = [
+    '--ffmpeg-location', FFMPEG_DIR, 
+    '--no-part', 
+    '--concurrent-fragments', '1', 
+    '--buffer-size', '16k', 
+    '-f', formatArg, 
+    '-o', '-', 
+    videoUrl
+  ];
 
-  console.log(`Piping direct stream for ${safeFilename}...`);
+  console.log(`Piping ultra-light stream for ${safeFilename}...`);
   const ytProcess = spawn(YTDLP_PATH, args);
 
   let headerSent = false;
@@ -257,7 +218,7 @@ app.get('/api/download', async (req, res) => {
     if (!headerSent) {
       console.error('yt-dlp exited before sending video data, code:', code);
       if (!res.headersSent) {
-        return res.status(500).send('Download error. Please try again or check video link.');
+        return res.status(500).send('Download error. Please try again.');
       }
     }
   });
